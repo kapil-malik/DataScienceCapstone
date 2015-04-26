@@ -1,0 +1,39 @@
+./spark-shell --name "Coursera" --driver-memory 16g --executor-memory 4g
+
+val dir = "file:///home/rmangla/kmalik-work/en_US"
+
+val blog = sc.textFile(dir+"/en_US.blogs.txt", 64)
+val news = sc.textFile(dir+"/en_US.news.txt", 64)
+val twitter = sc.textFile(dir+"/en_US.twitter.txt", 64)
+
+val all = blog.union(news).union(twitter)
+all.persist(org.apache.spark.storage.StorageLevel.MEMORY_ONLY_SER)
+all.count
+
+def getWords(line:String) = {line.replaceAll("[^a-zA-Z']+"," ").toLowerCase().split(" ");}
+def getNGramKVs(words:Array[String],n:Int) = {words.sliding(n+1).filter(_.length==n+1).map(_.mkString(",")).toArray}
+
+def getWordsRdd(rdd:org.apache.spark.rdd.RDD[String]) = rdd.map(getWords)
+def getNGramKVAllRdd(wRdd:org.apache.spark.rdd.RDD[Array[String]],n:Int) = wRdd.flatMap(w=>getNGramKVs(w,n)).map(x=>{val s=x.split(",");((s.take(n).mkString(" "),s(n)),1)}).reduceByKey(_+_).map(p=>(p._1._1,(p._1._2,p._2)))
+def getNGramKV1Rdd(nRdd:org.apache.spark.rdd.RDD[(String,(String,Int))]) = nRdd.groupByKey().mapValues(v=>{val v2=v.toArray.sortBy(-_._2);val s=v2.map(_._2).sum;(v2(0)._1,v2(0)._2*1.0/s,s)}).sortBy(-_._2._3)
+
+val words = getWordsRdd(all).persist(org.apache.spark.storage.StorageLevel.MEMORY_ONLY_SER)
+val unigramKVs = getNGramKV1Rdd(getNGramKVAllRdd(words,1)).persist(org.apache.spark.storage.StorageLevel.MEMORY_ONLY_SER)
+val bigramKVs = getNGramKV1Rdd(getNGramKVAllRdd(words,2)).persist(org.apache.spark.storage.StorageLevel.MEMORY_ONLY_SER)
+val trigramKVs = getNGramKV1Rdd(getNGramKVAllRdd(words,3))
+
+val ucount = unigramKVs.count // 557,336
+val bcount = bigramKVs.count  // 13,141,545
+val tcount = trigramKVs.count // <>
+
+val usum = unigramKVs.map(_._2._3).sum // 97,562,549
+val bsum = bigramKVs.map(_._2._3).sum  // 93,310,787
+val tsum = trigramKVs.map(_._2._3).sum // <>
+
+def getFirstKTotal(rdd:org.apache.spark.rdd.RDD[(String,(String, Double, Int))], k:Int) = rdd.take(k).map(_._2._3).sum
+
+unigramKVs.map(p=>Array(p._1,p._2._1,p._2._2).mkString(",")).coalesce(1, false).saveAsTextFile(dir+"/unigrams.csv")
+bigramKVs.map(p=>Array(p._1,p._2._1,p._2._2).mkString(",")).coalesce(1, false).saveAsTextFile(dir+"/bigrams.csv")
+
+sc.parallelize(bigramKVs.take(200000), 1).map(p=>Array(p._1,p._2._1,p._2._2).mkString(",")).saveAsTextFile(dir+"/bigrams200K.csv")
+sc.parallelize(trigramKVs.take(100000), 1).map(p=>Array(p._1,p._2._1,p._2._2).mkString(",")).saveAsTextFile(dir+"/trigrams100K.csv")
