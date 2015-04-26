@@ -1,0 +1,10 @@
+base
+doMC
+foreach
+iterators
+knitr
+NLP
+RColorBrewer
+SnowballC
+tm
+wordcloud
